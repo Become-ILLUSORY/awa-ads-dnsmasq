@@ -215,13 +215,29 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
         }
     }
 
-    // 写入正式文件。servers-file 只接受 server/rev-server，
-    // 而 2.90 上 server=/域名/ 不生效，只能用 local= 走 conf-dir + 重启。
+    // 配了 servers-file 就写那里并发 SIGHUP：dnsmasq 会热重载该文件，
+    // DNS 全程不中断。没配则退回 conf-dir + 重启。
+    if let Some(sf) = servers_file() {
+        if let Err(e) = write_servers_file(&sf, &staged) {
+            let _ = fs::remove_file(&staged);
+            return Err(e);
+        }
+        let _ = fs::remove_file(&staged);
+        log(&format!(
+            "已更新 {}，SIGHUP 热重载（DNS 不中断）",
+            sf.display()
+        ));
+        return sighup_dnsmasq();
+    }
+
     if let Err(e) = fs::rename(&staged, &target) {
         let _ = fs::remove_file(&staged);
         return Err(format!("替换规则文件: {e}"));
     }
-    log(&format!("已写入 {}，重启 dnsmasq", target.display()));
+    log(&format!(
+        "已写入 {}，重启 dnsmasq（配置 servers-file 可免重启）",
+        target.display()
+    ));
 
     match restart(opts) {
         Ok(()) => Ok(()),
@@ -234,6 +250,51 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
             }
         }
     }
+}
+
+/// 读 uci 配置里的 serversfile。OpenWrt 的 dnsmasq init 支持这个选项。
+fn servers_file() -> Option<PathBuf> {
+    let out = Command::new("uci")
+        .args(["-q", "get", "dhcp.@dnsmasq[0].serversfile"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let s = s.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(s))
+    }
+}
+
+/// 原子写入 servers-file，保证 dnsmasq 读到的永远是完整内容。
+fn write_servers_file(sf: &Path, staged: &Path) -> Result<(), String> {
+    if let Some(dir) = sf.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建 {}: {e}", dir.display()))?;
+    }
+    let tmp = sf.with_extension("tmp");
+    fs::copy(staged, &tmp).map_err(|e| format!("写入 {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, sf).map_err(|e| format!("替换 {}: {e}", sf.display()))?;
+    Ok(())
+}
+
+/// 发 SIGHUP 让 dnsmasq 重读 servers-file。
+/// 手册明确：SIGHUP 不重读配置文件，但会重读 servers-file。
+fn sighup_dnsmasq() -> Result<(), String> {
+    let out = Command::new("killall")
+        .args(["-HUP", "dnsmasq"])
+        .output()
+        .map_err(|e| format!("执行 killall: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "发送 SIGHUP 失败: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// dnsmasq --test 校验。返回 Ok(false) 表示无法校验。

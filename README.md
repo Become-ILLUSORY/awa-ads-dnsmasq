@@ -10,17 +10,19 @@ dnsmasq 手册明确：
 
 > **SIGHUP does NOT re-read the configuration file.**
 
-也就是说，改 `conf-dir` 里的文件后发 SIGHUP 是无效的，必须重启 dnsmasq——重启期间所有 DNS 查询失败，会造成短暂断网。
+改 `conf-dir` 里的文件后发 SIGHUP 是无效的，必须重启 dnsmasq——重启期间所有 DNS 查询失败。
 
 但手册还有一条：
 
 > `--servers-file=<file>` — the file is re-read and the configuration therein is **updated when dnsmasq receives SIGHUP**.
 
-而 `--address=/example.com/` 与 `--server=/example.com/` 语义完全相同，都返回 NXDOMAIN：
+而 `--address=/example.com/` 与 `--server=/example.com/` 语义相同，都返回 NXDOMAIN：
 
 > one or more domains with no address returns a no-such-domain answer, so `--address=/example.com/` is equivalent to `--server=/example.com/`
 
 所以本工具把规则写成 `server=/域名/` 放进 servers-file，更新后发 SIGHUP 热重载，**DNS 全程不中断**。
+
+首次运行会写 `conf-dir` 并重启一次；配置好 servers-file 之后，每次更新只发 SIGHUP。
 
 ## 为什么用 NXDOMAIN
 

@@ -4,7 +4,7 @@ use std::io::{BufRead, Write};
 
 pub const UPDATE_TIME_PREFIX: &str = "#Update time:";
 pub const ADDRESS_PREFIX: &str = "address=/";
-pub const LOCAL_PREFIX: &str = "local=/";
+pub const SERVER_PREFIX: &str = "server=/";
 /// 头部最多扫描这么多行，避免无头文件被整份读完
 const HEADER_MAX_LINES: usize = 50;
 /// 少于这个条数视为异常响应，拒绝应用
@@ -76,14 +76,15 @@ fn is_timestamp(s: &str) -> bool {
 /// 把 `address=/域名/#` 改写为 `address=/域名/`，
 /// 让 dnsmasq 对该域名所有记录类型直接返回 NXDOMAIN，而不是 0.0.0.0。
 /// 逐行流式处理，内存占用与文件大小无关。返回写出的规则条数。
-/// 把 `address=/域名/#` 改写为 `local=/域名/`。
+/// 把 `address=/域名/#` 改写为 `server=/域名/`。
 ///
 /// 手册说 `--address=/example.com/`、`--server=/example.com/`、
-/// `--local=/example.com/` 三者等价，都返回 NXDOMAIN。
+/// `--local=/example.com/` 三者等价，都返回 NXDOMAIN。已在
+/// dnsmasq 2.90（ImmortalWrt 24.10）与 2.93 上实测确认。
 ///
-/// 但实测 dnsmasq 2.90（ImmortalWrt 24.10）上只有 `local=` 生效：
-/// `server=/域名/` 被当成「用默认上游服务器」，规则形同虚设。
-/// 2.93 上两者都正常，说明是版本差异，用 `local=` 两边都安全。
+/// 选 `server=` 是因为 servers-file 只接受 server/rev-server，
+/// 而 servers-file 会在 SIGHUP 时热重载——更新规则不用重启
+/// dnsmasq，DNS 全程不中断。
 pub fn rewrite<R: BufRead, W: Write>(r: &mut R, w: &mut W) -> Result<usize, RuleError> {
     let mut count = 0;
     let mut line = String::with_capacity(512);
@@ -100,9 +101,9 @@ pub fn rewrite<R: BufRead, W: Write>(r: &mut R, w: &mut W) -> Result<usize, Rule
         // 只处理 address 行，注释和空行原样保留（servers-file 允许注释）
         let out = if let Some(rest) = s.strip_prefix(ADDRESS_PREFIX) {
             count += 1;
-            // address=/域名/#  ->  local=/域名/
+            // address=/域名/#  ->  server=/域名/
             let domain = rest.strip_suffix('#').unwrap_or(rest);
-            format!("{LOCAL_PREFIX}{domain}")
+            format!("{SERVER_PREFIX}{domain}")
         } else {
             s.to_string()
         };
@@ -143,7 +144,7 @@ address=/a.market.xiaomi.com/#\n";
         let n = rewrite(&mut c, &mut out).unwrap();
         assert_eq!(n, 2, "body lost after header parse");
         let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("local=/1rtb.com/"));
+        assert!(s.contains("server=/1rtb.com/"));
     }
 
     #[test]
@@ -177,8 +178,8 @@ address=/already.local/\n\
         let s = String::from_utf8(out).unwrap();
         assert!(!s.contains("address="), "不应残留 address 指令");
         assert!(!s.contains("/#"));
-        assert!(s.contains("local=/1rtb.com/\n"));
-        assert!(s.contains("local=/already.local/\n"));
+        assert!(s.contains("server=/1rtb.com/\n"));
+        assert!(s.contains("server=/already.local/\n"));
         assert!(s.contains("# comment\n"));
     }
 
@@ -187,6 +188,6 @@ address=/already.local/\n\
         let mut out = Vec::new();
         let n = rewrite(&mut Cursor::new("address=/last.example/#"), &mut out).unwrap();
         assert_eq!(n, 1);
-        assert_eq!(String::from_utf8(out).unwrap(), "local=/last.example/\n");
+        assert_eq!(String::from_utf8(out).unwrap(), "server=/last.example/\n");
     }
 }
