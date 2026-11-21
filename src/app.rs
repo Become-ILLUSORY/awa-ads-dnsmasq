@@ -200,6 +200,11 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
         if opts.verbose {
             log(&format!("规则已是当前版本: {}", effective.display()));
         }
+        // 内容没变也要清理：配了 servers-file 时，conf-dir 里那份旧文件
+        // 不该再留着，否则上游删掉的域名会一直被拦。
+        if sf.is_some() {
+            cleanup_confdir(&target);
+        }
         return Ok(());
     }
     if opts.dry_run {
@@ -232,12 +237,7 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
         }
         let _ = fs::remove_file(&staged);
 
-        // 清掉 conf-dir 里的旧文件：配了 servers-file 后它不再更新，
-        // 留着会让上游已删除的域名一直被拦。删掉后 dnsmasq 只认 servers-file。
-        if target.exists() {
-            let _ = fs::remove_file(&target);
-            log(&format!("已移除旧的 {}", target.display()));
-        }
+        cleanup_confdir(&target);
 
         log(&format!(
             "已更新 {}，SIGHUP 热重载（DNS 不中断）",
@@ -265,6 +265,14 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
                 Err(e2) => Err(format!("回滚后仍无法启动，请手动检查: {e2}")),
             }
         }
+    }
+}
+
+/// 删掉 conf-dir 里那份旧规则。
+/// 配了 servers-file 后它不再更新，留着会让上游已删除的域名一直被拦。
+fn cleanup_confdir(target: &Path) {
+    if target.exists() && fs::remove_file(target).is_ok() {
+        log(&format!("已移除旧的 {}", target.display()));
     }
 }
 
