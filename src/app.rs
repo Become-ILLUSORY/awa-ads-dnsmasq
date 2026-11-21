@@ -188,14 +188,22 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
     let dir = opts.conf_dir.clone().unwrap_or_else(detect_conf_dir);
     let target = dir.join("awa-ads-dnsmasq.conf");
 
-    if same_content(cache, &target) {
+    // 配了 servers-file 就以它为准：规则可能还没同步过去，
+    // 只检查 conf-dir 会漏掉这种情况。
+    let sf = servers_file();
+    let effective = match &sf {
+        Some(p) => p.clone(),
+        None => target.clone(),
+    };
+
+    if same_content(cache, &effective) {
         if opts.verbose {
-            log(&format!("规则已是当前版本: {}", target.display()));
+            log(&format!("规则已是当前版本: {}", effective.display()));
         }
         return Ok(());
     }
     if opts.dry_run {
-        log(&format!("dry-run: 将写入 {}", target.display()));
+        log(&format!("dry-run: 将写入 {}", effective.display()));
         return Ok(());
     }
 
@@ -217,8 +225,8 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
 
     // 配了 servers-file 就写那里并发 SIGHUP：dnsmasq 会热重载该文件，
     // DNS 全程不中断。没配则退回 conf-dir + 重启。
-    if let Some(sf) = servers_file() {
-        if let Err(e) = write_servers_file(&sf, &staged) {
+    if let Some(sf) = &sf {
+        if let Err(e) = write_servers_file(sf, &staged) {
             let _ = fs::remove_file(&staged);
             return Err(e);
         }
