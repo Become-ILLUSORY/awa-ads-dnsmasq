@@ -1,8 +1,8 @@
 #!/bin/sh /etc/rc.common
-# awa-ads-dnsmasq：同步秋风广告规则到 dnsmasq
+# awa-ads-dnsmasq：开机后同步秋风广告规则到 dnsmasq
 #
-# 规则写入 conf-dir 后重启 dnsmasq 生效。
-# 实测 servers-file 的 SIGHUP 热重载在 ujail 环境下无效，故不采用。
+# conf-dir 在 tmpfs，重启会清空，所以每次开机都要重新写入规则。
+# 规则来自 /etc/awa-ads-dnsmasq/ads.conf 缓存，通常不需要重新下载。
 
 START=96
 STOP=10
@@ -11,12 +11,17 @@ PROG=/usr/bin/awa-ads-dnsmasq
 
 start() {
 	(
+		# 等网络就绪：能解析就说明 DNS 通了，比 ping 更贴近实际需要
 		i=0
-		while [ $i -lt 90 ]; do
-			ping -c1 -W1 223.5.5.5 >/dev/null 2>&1 && break
+		while [ $i -lt 60 ]; do
+			nslookup baidu.com 127.0.0.1 >/dev/null 2>&1 && break
 			i=$((i + 1))
-			sleep 1
+			sleep 2
 		done
+		if [ $i -ge 60 ]; then
+			logger -t awa-ads "等待网络超时，仍尝试同步规则"
+		fi
+
 		"$PROG" 2>&1 | logger -t awa-ads
 	) &
 }
@@ -25,7 +30,12 @@ stop() {
 	:
 }
 
-# 移除规则并恢复配置
+restart() {
+	stop
+	start
+}
+
+# 移除规则
 uninstall_rules() {
 	local dir
 	dir=$(uci -q get dhcp.@dnsmasq[0].confdir)
@@ -33,8 +43,6 @@ uninstall_rules() {
 	[ -z "$dir" ] && dir=/tmp/dnsmasq.d
 
 	rm -f "$dir/awa-ads-dnsmasq.conf" "$dir/.awa-ads-dnsmasq.conf.tmp"
-	uci -q delete dhcp.@dnsmasq[0].serversfile
-	uci -q commit dhcp
 	/etc/init.d/dnsmasq restart
 	logger -t awa-ads "已移除规则"
 }
