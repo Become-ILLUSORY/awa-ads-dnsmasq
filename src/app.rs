@@ -223,7 +223,10 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
             return Err(e);
         }
         let _ = fs::remove_file(&staged);
-        log(&format!("已更新 {}，SIGHUP 热重载（DNS 不中断）", sf.display()));
+        log(&format!(
+            "已更新 {}，SIGHUP 热重载（DNS 不中断）",
+            sf.display()
+        ));
         return sighup_dnsmasq();
     }
 
