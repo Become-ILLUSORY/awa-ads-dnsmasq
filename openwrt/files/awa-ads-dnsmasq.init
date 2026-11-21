@@ -1,14 +1,13 @@
 #!/bin/sh /etc/rc.common
 # awa-ads-dnsmasq：同步秋风广告规则到 dnsmasq
 #
-# 规则用 server=/域名/ 格式写进 servers-file，
-# dnsmasq 收到 SIGHUP 会热重载该文件，DNS 不中断。
+# 规则写入 conf-dir 后重启 dnsmasq 生效。
+# 实测 servers-file 的 SIGHUP 热重载在 ujail 环境下无效，故不采用。
 
 START=96
 STOP=10
 
 PROG=/usr/bin/awa-ads-dnsmasq
-SERVERS=/etc/awa-ads-dnsmasq/servers.conf
 
 start() {
 	(
@@ -18,29 +17,12 @@ start() {
 			i=$((i + 1))
 			sleep 1
 		done
-		ensure_servers_file
 		"$PROG" 2>&1 | logger -t awa-ads
 	) &
 }
 
 stop() {
 	:
-}
-
-# 首次运行时把 serversfile 配到 uci 里。
-# 之后每次更新只发 SIGHUP，dnsmasq 不重启，DNS 不中断。
-ensure_servers_file() {
-	local cur
-	cur=$(uci -q get dhcp.@dnsmasq[0].serversfile)
-	[ -n "$cur" ] && return 0
-
-	mkdir -p /etc/awa-ads-dnsmasq
-	touch "$SERVERS"
-	uci -q set dhcp.@dnsmasq[0].serversfile="$SERVERS"
-	uci -q commit dhcp
-	logger -t awa-ads "已配置 servers-file: $SERVERS"
-	# 需要重启一次让 dnsmasq 读到这个新选项，之后不再重启
-	/etc/init.d/dnsmasq restart
 }
 
 # 移除规则并恢复配置

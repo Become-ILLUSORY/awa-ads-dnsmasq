@@ -188,27 +188,14 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
     let dir = opts.conf_dir.clone().unwrap_or_else(detect_conf_dir);
     let target = dir.join("awa-ads-dnsmasq.conf");
 
-    // 配了 servers-file 就以它为准：规则可能还没同步过去，
-    // 只检查 conf-dir 会漏掉这种情况。
-    let sf = servers_file();
-    let effective = match &sf {
-        Some(p) => p.clone(),
-        None => target.clone(),
-    };
-
-    if same_content(cache, &effective) {
+    if same_content(cache, &target) {
         if opts.verbose {
-            log(&format!("规则已是当前版本: {}", effective.display()));
-        }
-        // 内容没变也要清理：配了 servers-file 时，conf-dir 里那份旧文件
-        // 不该再留着，否则上游删掉的域名会一直被拦。
-        if sf.is_some() {
-            cleanup_confdir(&target);
+            log(&format!("规则已是当前版本: {}", target.display()));
         }
         return Ok(());
     }
     if opts.dry_run {
-        log(&format!("dry-run: 将写入 {}", effective.display()));
+        log(&format!("dry-run: 将写入 {}", target.display()));
         return Ok(());
     }
 
@@ -228,33 +215,14 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
         }
     }
 
-    // 配了 servers-file 就写那里并发 SIGHUP：dnsmasq 会热重载该文件，
-    // DNS 全程不中断。没配则退回 conf-dir + 重启。
-    if let Some(sf) = &sf {
-        if let Err(e) = write_servers_file(sf, &staged) {
-            let _ = fs::remove_file(&staged);
-            return Err(e);
-        }
-        let _ = fs::remove_file(&staged);
-
-        cleanup_confdir(&target);
-
-        log(&format!(
-            "已更新 {}，SIGHUP 热重载（DNS 不中断）",
-            sf.display()
-        ));
-        return sighup_dnsmasq();
-    }
-
     if let Err(e) = fs::rename(&staged, &target) {
         let _ = fs::remove_file(&staged);
         return Err(format!("替换规则文件: {e}"));
     }
-    log(&format!(
-        "已写入 {}，重启 dnsmasq（配置 servers-file 可免重启）",
-        target.display()
-    ));
+    log(&format!("已写入 {}，重启 dnsmasq", target.display()));
 
+    // 重启失败说明新规则让 dnsmasq 起不来，移除规则再试一次，
+    // 保证 DNS 至少恢复到没有拦截的状态。
     match restart(opts) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -266,59 +234,6 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
             }
         }
     }
-}
-
-/// 删掉 conf-dir 里那份旧规则。
-/// 配了 servers-file 后它不再更新，留着会让上游已删除的域名一直被拦。
-fn cleanup_confdir(target: &Path) {
-    if target.exists() && fs::remove_file(target).is_ok() {
-        log(&format!("已移除旧的 {}", target.display()));
-    }
-}
-
-/// 读 uci 配置里的 serversfile。OpenWrt 的 dnsmasq init 支持这个选项。
-fn servers_file() -> Option<PathBuf> {
-    let out = Command::new("uci")
-        .args(["-q", "get", "dhcp.@dnsmasq[0].serversfile"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout);
-    let s = s.trim();
-    if s.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(s))
-    }
-}
-
-/// 原子写入 servers-file，保证 dnsmasq 读到的永远是完整内容。
-fn write_servers_file(sf: &Path, staged: &Path) -> Result<(), String> {
-    if let Some(dir) = sf.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("创建 {}: {e}", dir.display()))?;
-    }
-    let tmp = sf.with_extension("tmp");
-    fs::copy(staged, &tmp).map_err(|e| format!("写入 {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, sf).map_err(|e| format!("替换 {}: {e}", sf.display()))?;
-    Ok(())
-}
-
-/// 发 SIGHUP 让 dnsmasq 重读 servers-file。
-/// 手册明确：SIGHUP 不重读配置文件，但会重读 servers-file。
-fn sighup_dnsmasq() -> Result<(), String> {
-    let out = Command::new("killall")
-        .args(["-HUP", "dnsmasq"])
-        .output()
-        .map_err(|e| format!("执行 killall: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "发送 SIGHUP 失败: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(())
 }
 
 /// dnsmasq --test 校验。返回 Ok(false) 表示无法校验。

@@ -4,25 +4,16 @@
 
 Rust 编写，静态链接，单二进制，1.7 MB。
 
-## 核心设计：热重载，不重启 DNS
+## 工作方式
 
-dnsmasq 手册明确：
+规则写成 `server=/域名/`，写入 dnsmasq 的 conf-dir，然后重启 dnsmasq 生效。
 
-> **SIGHUP does NOT re-read the configuration file.**
+重启期间 DNS 会中断 1-2 秒，这是唯一的中断点。每天检查一次，只有上游规则
+真的更新时才重启。
 
-改 `conf-dir` 里的文件后发 SIGHUP 是无效的，必须重启 dnsmasq——重启期间所有 DNS 查询失败。
-
-但手册还有一条：
-
-> `--servers-file=<file>` — the file is re-read and the configuration therein is **updated when dnsmasq receives SIGHUP**.
-
-而 `--address=/example.com/` 与 `--server=/example.com/` 语义相同，都返回 NXDOMAIN：
-
-> one or more domains with no address returns a no-such-domain answer, so `--address=/example.com/` is equivalent to `--server=/example.com/`
-
-所以本工具把规则写成 `server=/域名/` 放进 servers-file，更新后发 SIGHUP 热重载，**DNS 全程不中断**。
-
-首次运行会写 `conf-dir` 并重启一次；配置好 servers-file 之后，每次更新只发 SIGHUP。
+> 曾尝试用 `servers-file` + SIGHUP 做免重启热重载。手册说该文件会在
+> SIGHUP 时重读，本地 `--no-daemon` 环境也验证有效，但在 OpenWrt 的
+> ujail 隔离环境下实测无效——信号发出去了，规则却没重载。故放弃该方案。
 
 ## 为什么用 NXDOMAIN
 
