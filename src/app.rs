@@ -231,6 +231,14 @@ fn apply(opts: &Options, cache: &Path) -> Result<(), String> {
             return Err(e);
         }
         let _ = fs::remove_file(&staged);
+
+        // 清掉 conf-dir 里的旧文件：配了 servers-file 后它不再更新，
+        // 留着会让上游已删除的域名一直被拦。删掉后 dnsmasq 只认 servers-file。
+        if target.exists() {
+            let _ = fs::remove_file(&target);
+            log(&format!("已移除旧的 {}", target.display()));
+        }
+
         log(&format!(
             "已更新 {}，SIGHUP 热重载（DNS 不中断）",
             sf.display()
