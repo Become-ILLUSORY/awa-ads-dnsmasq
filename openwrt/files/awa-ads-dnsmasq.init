@@ -1,0 +1,62 @@
+#!/bin/sh /etc/rc.common
+# awa-ads-dnsmasq：同步秋风广告规则到 dnsmasq
+#
+# 规则用 server=/域名/ 格式写进 servers-file，
+# dnsmasq 收到 SIGHUP 会热重载该文件，DNS 不中断。
+
+START=96
+STOP=10
+
+PROG=/usr/bin/awa-ads-dnsmasq
+SERVERS=/etc/awa-ads-dnsmasq/servers.conf
+
+start() {
+	# 等网络就绪后跑一次；失败就跳过，不影响任何服务
+	(
+		i=0
+		while [ $i -lt 90 ]; do
+			ping -c1 -W1 223.5.5.5 >/dev/null 2>&1 && break
+			i=$((i + 1))
+			sleep 1
+		done
+		ensure_servers_file
+		"$PROG" 2>&1 | logger -t awa-ads-dnsmasq
+	) &
+}
+
+stop() {
+	:
+}
+
+# 首次运行时把 serversfile 配到 uci 里，之后就能热重载
+ensure_servers_file() {
+	local cur
+	cur=$(uci -q get dhcp.@dnsmasq[0].serversfile)
+	[ -n "$cur" ] && return 0
+
+	mkdir -p /etc/awa-ads-dnsmasq
+	touch "$SERVERS"
+	uci -q set dhcp.@dnsmasq[0].serversfile="$SERVERS"
+	uci -q commit dhcp
+	logger -t awa-ads-dnsmasq "已配置 servers-file: $SERVERS"
+	# 需要重启一次让 dnsmasq 读到这个新选项，之后更新都不再重启
+	/etc/init.d/dnsmasq restart
+}
+
+# 移除规则并恢复配置
+uninstall_rules() {
+	local dir
+	dir=$(uci -q get dhcp.@dnsmasq[0].confdir)
+	[ -z "$dir" ] && dir=$(ls -d /tmp/dnsmasq*.d 2>/dev/null | head -n1)
+	[ -z "$dir" ] && dir=/tmp/dnsmasq.d
+
+	rm -f "$dir/awa-ads-dnsmasq.conf" "$dir/.awa-ads-dnsmasq.conf.tmp"
+	uci -q delete dhcp.@dnsmasq[0].serversfile
+	uci -q commit dhcp
+	/etc/init.d/dnsmasq restart
+	logger -t awa-ads-dnsmasq "已移除规则"
+}
+
+disable() {
+	uninstall_rules
+}

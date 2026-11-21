@@ -1,0 +1,21 @@
+[package]
+name = "awa-ads-dnsmasq"
+version = "1.0.0"
+edition = "2021"
+description = "按 #Update time 判断更新，把秋风广告规则同步给 OpenWrt dnsmasq"
+license = "MIT"
+
+[[bin]]
+name = "awa-ads-dnsmasq"
+path = "src/main.rs"
+
+[dependencies]
+# 只用 ureq：同步 HTTP，基于 rustls，不拉 tokio
+ureq = { version = "2.10", default-features = false, features = ["tls", "gzip"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
